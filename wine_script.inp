@@ -1,0 +1,253 @@
+open "wine_quality.gdt"
+#wykresy do analizy statystycznej tworzone w pliku python
+
+#stworzenie modelu ściśle liniowego
+ols quality const residualsugar chlorides sulphates citricacid freesulfurdioxide volatileacidity fixedacidity totalsulfurdioxide alcohol
+
+#metoda hellwiga
+function matrix dodawanie_1_binarne(scalar n, matrix pozycja)
+    kontrolna=1
+    loop j=1..n --quiet
+        if kontrolna==1
+            if pozycja[j,1]==0
+                pozycja[j,1]=1
+                kontrolna=0
+            else
+                pozycja[j,1]=0
+            endif
+        endif
+    endloop
+    return pozycja
+end function
+
+function scalar helwig (series Y, list robocza)
+    H=0
+    loop foreach j robocza --quiet
+        h=(corr(Y,robocza.$j))^2
+        s=0
+        loop foreach k robocza --quiet
+            c=abs(corr(robocza.$j,robocza.$k))
+            s=s+c
+        endloop
+        h=h/s
+        H=H+h
+    endloop
+    return H
+end function
+
+Y=quality
+list xlist=alcohol sulphates volatileacidity
+
+n=nelem(xlist)
+pozycja=zeros(n,1)
+kombinacji=2^n-2
+H_max=helwig(Y,xlist)
+H_rob=-1
+loop j=1..kombinacji --quiet
+    pozycja=dodawanie_1_binarne(n,pozycja)
+    robocza=xlist
+    loop foreach k xlist --quiet
+        if pozycja[k,1]==1
+            robocza=robocza-xlist.$k
+        endif
+    endloop
+    H_rob=helwig(Y,robocza)
+    if H_rob>H_max
+        H_max=H_rob
+        najlepszalista=robocza
+    endif
+endloop
+
+H_max
+ 
+
+
+#metoda krokowa-wsteczna
+
+#usuwam residual sugar, bo jest najmniej istotna
+ols  Y const chlorides sulphates citricacid freesulfurdioxide volatileacidity fixedacidity totalsulfurdioxide alcohol
+#usuwam citricacid, bo jest najmniej istotna
+ols  Y const chlorides sulphates freesulfurdioxide volatileacidity fixedacidity totalsulfurdioxide alcohol
+#usuwam freesulflurdioxide, bo jest najmniej istotna
+ols  Y const chlorides sulphates volatileacidity fixedacidity totalsulfurdioxide alcohol
+#usuwam fixedacidity, bo jest najmniej istotna
+ols  Y const chlorides  totalsulfurdioxide alcohol sulphates volatileacidity
+
+#właściwa postać liniowa
+ols quality const alcohol sulphates volatileacidity
+
+#z logarytamami
+Y=l_quality
+xlist=l_alcohol l_sulphates l_volatileacidity
+ols Y const xlist
+
+#1.wspolczynnik determinacji
+scalar rsq = $rsq
+rsq
+scalar k = nelem(xlist) 
+scalar n = nobs(Y)   
+scalar rsq_skor = $rsq - (k/(n-k-1))*(1-$rsq)
+rsq_skor
+
+#2 efekt katalizy
+scalar n = nobs(Y) #liczba obserwacji
+scalar k = nelem(xlist) #liczba zmiennych (bez stałej)
+
+#para korelacyjna:
+matrix R = zeros(k,k)
+matrix R0 = zeros(k,1)
+loop foreach i xlist --quiet
+    R0[i,1]=corr(Y,xlist.$i)
+    loop foreach j xlist --quiet
+        R[i,j]=corr(xlist.$i,xlist.$j)
+    endloop
+endloop  
+
+#regularna para korelacyjna
+przejscie=zeros(k,2)
+R0_regularne=sort(abs(R0))
+loop i=1..k --quiet
+    loop j=1..k --quiet
+        if R0_regularne[i,1]==abs(R0[j,1])
+            przejscie[i,1]=j
+            if R0[j,1]>0
+                przejscie[j,2]=1
+            else
+                przejscie[j,2]=-1
+            endif
+        endif
+    endloop
+endloop
+R_regularne=R
+loop i=2..k --quiet
+    loop j=1..i-1 --quiet
+        R_regularne[i,j]=przejscie[przejscie[j,1],2]*przejscie[przejscie[i,1],2]*R[przejscie[j,1],przejscie[i,1]]
+        R_regularne[j,i]=R_regularne[i,j]
+    endloop
+endloop
+przejscie
+R
+R0
+R_regularne
+R0_regularne
+
+loop foreach i xlist --quiet
+    loop foreach j xlist --quiet
+        if i>j
+        if corr(xlist.$i,Y)>0
+            ca=1
+        else
+            ca=-1
+        endif
+        if corr(xlist.$j,Y)>0
+            cb=1
+        else
+            cb=-1
+        endif
+        if abs(corr(xlist.$i,Y))>abs(corr(xlist.$j,Y))
+            if (corr(xlist.$i,xlist.$j)*ca*cb>ca*cb*corr(xlist.$j,Y)/corr(xlist.$i,Y))||(corr(xlist.$i,xlist.$j)*ca*cb<0)
+                list katalizator = xlist.$j
+                list w_parze = xlist.$j xlist.$i
+                print "KATALIZATOR:"
+                katalizator
+                print "W PARZE:"
+                w_parze
+            endif
+        else
+            if (corr(xlist.$i,xlist.$j)*ca*cb>ca*cb*corr(xlist.$i,Y)/corr(xlist.$j,Y))||(corr(xlist.$i,xlist.$j)*ca*cb<0)
+                list katalizator = xlist.$i
+                list w_parze = xlist.$i xlist.$j
+                print "KATALIZATOR:"
+                katalizator
+                print "W PARZE:"
+                w_parze
+            endif 
+        endif
+        endif
+    endloop
+endloop
+
+#natężenie efektu katalizy
+ols Y const xlist --quiet
+H=helwig(Y,xlist)
+scalar natezenie_efektu_katalizy=$rsq-H
+natezenie_efektu_katalizy
+
+#3 normalnosc rozkladu skladnika losowego
+ols Y const xlist --quiet
+modtest --normality
+
+#5 test zmiennych dodanych, pominietych!
+ols Y const xlist --quiet
+#omit l_volatileacidity
+#omit l_alcohol
+#omit l_sulphates
+#omit l_volatileacidity l_alcohol
+#omit l_volatileacidity l_sulphates
+#omit l_alcohol l_sulphates
+#add l_residualsugar
+#add l_chlorides
+#add l_freesulfurdioxide
+#add l_fixedacidity
+#add l_totalsulfurdioxide
+#add l_residualsugar l_freesulfurdioxide
+#add l_fixedacidity l_totalsulfurdioxide
+
+#6 obserwacje odstające
+
+#7 test liczby serii
+series e =$uhat
+dataset sortby quality
+runs e --equal
+
+#8 test reset
+reset
+
+#9 test heteroskedastycznosc
+ols Y const xlist --quiet
+modtest --breusch-pagan --robust
+
+#10 test chowa
+chow 800
+
+#11 wspoliniowosc
+vif
+
+#12 koincydencja – macierz R0 z efektu katalizy
+
+#14.1 korekta heterosked
+hsk Y const xlist
+
+#14.2 predykcja
+#wyklikane bez kodu
+#>korekta heteroskedastycznosci
+#>prognoza
+# PROGNOZA PUNKTOWA, prognoza dla wartości średnich
+hsk Y const xlist --vcv --quiet
+matrix x_tau = {1, mean(l_alcohol), mean(l_sulphates), mean(l_volatileacidity)}
+matrix a = $coeff
+scalar prognoza_punktowa_dla_l_q = x_tau*a
+
+# wariancja prognozy
+scalar wariancja_prognozy_dla_l_q= x_tau*$vcv*x_tau'+$ess/$df
+
+# blad prognozy
+scalar blad_prognozy_dla_l_q=sqrt(wariancja_prognozy_dla_l_q)
+
+#95% CI dla l_q
+scalar dolna = prognoza_punktowa_dla_l_q-critical(t,$df,0.025)*blad_prognozy_dla_l_q
+scalar gorna = prognoza_punktowa_dla_l_q+critical(t,$df,0.025)*blad_prognozy_dla_l_q
+
+scalar prognoza_punktowa_dla_q = exp(prognoza_punktowa_dla_l_q+0.5*wariancja_prognozy_dla_l_q)
+#95% CI dla q
+scalar dolna_dla_q = exp(dolna)
+scalar gorna_dla_q = exp(gorna)
+
+#model logitowy
+#wszystkie zmienne
+logit quality const residualsugar chlorides sulphates citricacid freesulfurdioxide volatileacidity fixedacidity totalsulfurdioxide alcohol
+#zmienne istotne
+logit quality const chlorides sulphates volatileacidity fixedacidity totalsulfurdioxide alcohol
+
+
+
